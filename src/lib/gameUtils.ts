@@ -8,39 +8,29 @@ export const isValidSecret = (value: string): boolean => {
   return /^\d{3}$/.test(value);
 };
 
-// Calculate hint based on guess and secret
+// Calculate hint based ONLY on exact position match
 export const calculateHint = (guess: string, secret: string): string => {
-  if (guess === secret) {
-    return '🎉 You win! All digits correct!';
-  }
+  let correct = 0;
 
-  const guessDigits = guess.split('');
-  const secretDigits = secret.split('');
-  
-  let matchCount = 0;
-  const secretUsed = [false, false, false];
-  
-  // Count matching digits (regardless of position)
   for (let i = 0; i < 3; i++) {
-    for (let j = 0; j < 3; j++) {
-      if (!secretUsed[j] && guessDigits[i] === secretDigits[j]) {
-        matchCount++;
-        secretUsed[j] = true;
-        break;
-      }
+    if (guess[i] === secret[i]) {
+      correct++;
     }
   }
 
-  if (matchCount === 0) {
+  if (correct === 0) {
     return '❌ No matching digits';
-  } else if (matchCount === 1) {
+  }
+
+  if (correct === 1) {
     return '⚠️ One correct digit';
-  } else if (matchCount === 2) {
-    return '⚠️ Two correct digits';
-  } else {
-    // 3 matching digits but wrong order (not exact match, which is handled above)
+  }
+
+  if (correct === 2) {
     return '⚠️ Two correct digits';
   }
+
+  return '🎉 You win! All digits correct!';
 };
 
 // Get hint type for styling
@@ -61,15 +51,20 @@ export const formatTime = (timestamp: string): string => {
 };
 
 // Calculate game duration
-export const calculateDuration = (start: string | null, end: string | null): string => {
+export const calculateDuration = (
+  start: string | null,
+  end: string | null
+): string => {
   if (!start) return '--:--';
-  
+
   const startTime = new Date(start).getTime();
   const endTime = end ? new Date(end).getTime() : Date.now();
   const diff = Math.floor((endTime - startTime) / 1000);
-  
+
   const minutes = Math.floor(diff / 60);
   const seconds = diff % 60;
-  
-  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+  return `${minutes.toString().padStart(2, '0')}:${seconds
+    .toString()
+    .padStart(2, '0')}`;
 };
