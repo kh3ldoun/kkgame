@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { GameRoom, Guess, Player } from '@/types/game';
 import { generatePlayerId, calculateHint, isValidSecret } from '@/lib/gameUtils';
@@ -12,7 +12,11 @@ export const useGameRoom = () => {
   const [player, setPlayer] = useState<Player | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const { toast } = useToast();
+
+  // 🧠 يمنع إعادة الاشتراك لنفس الغرفة
+  const subscribedRoomId = useRef<string | null>(null);
 
   /* =========================
      🧹 CLEANUP ROOMS
@@ -27,34 +31,32 @@ export const useGameRoom = () => {
   }, []);
 
   /* =========================
-     🔄 UPDATE LAST ACTIVITY
-  ========================= */
-  const updateLastActivity = useCallback(async (roomId: string) => {
-    await supabase
-      .from('game_rooms')
-      .update({ last_activity_at: new Date().toISOString() })
-      .eq('id', roomId);
-  }, []);
-
-  /* =========================
-     📡 SUBSCRIPTIONS
+     📡 REALTIME SUBSCRIPTIONS
   ========================= */
   useEffect(() => {
     if (!room?.id) return;
+
+    // 🚫 لا تعيد الاشتراك إذا نفس الغرفة
+    if (subscribedRoomId.current === room.id) return;
+    subscribedRoomId.current = room.id;
 
     const roomChannel = supabase
       .channel(`room-${room.id}`)
       .on(
         'postgres_changes',
         {
-          event: '*',
+          event: 'UPDATE',
           schema: 'public',
           table: 'game_rooms',
           filter: `id=eq.${room.id}`,
         },
         (payload) => {
           if (payload.new) {
-            setRoom(payload.new as GameRoom);
+            setRoom((prev) =>
+              prev
+                ? { ...prev, ...(payload.new as GameRoom) }
+                : (payload.new as GameRoom)
+            );
           }
         }
       )
@@ -81,6 +83,7 @@ export const useGameRoom = () => {
     return () => {
       supabase.removeChannel(roomChannel);
       supabase.removeChannel(guessChannel);
+      subscribedRoomId.current = null;
     };
   }, [room?.id]);
 
@@ -105,7 +108,7 @@ export const useGameRoom = () => {
 
         if (existingRoom) {
           if (existingRoom.player2_id) {
-            throw new Error('Room is full! Only 2 players allowed.');
+            throw new Error('Room is full');
           }
 
           const { data: updatedRoom } = await supabase
@@ -123,13 +126,13 @@ export const useGameRoom = () => {
           setRoom(updatedRoom as GameRoom);
           setPlayer({ id: playerId, name: playerName, isPlayer1: false });
 
-          const { data: existingGuesses } = await supabase
+          const { data } = await supabase
             .from('guesses')
             .select('*')
             .eq('room_id', existingRoom.id)
             .order('created_at', { ascending: true });
 
-          setGuesses((existingGuesses as Guess[]) || []);
+          setGuesses((data as Guess[]) || []);
         } else {
           const { data: newRoom } = await supabase
             .from('game_rooms')
@@ -148,11 +151,11 @@ export const useGameRoom = () => {
           setGuesses([]);
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to join room';
-        setError(message);
+        const msg = err instanceof Error ? err.message : 'Join failed';
+        setError(msg);
         toast({
           title: 'Error',
-          description: message,
+          description: msg,
           variant: 'destructive',
         });
       } finally {
@@ -167,15 +170,14 @@ export const useGameRoom = () => {
   ========================= */
   const setSecret = useCallback(
     async (secret: string) => {
-      if (!room || !player) return;
-      if (!isValidSecret(secret)) return;
+      if (!room || !player || !isValidSecret(secret)) return;
 
       setLoading(true);
 
       try {
         const field = player.isPlayer1 ? 'player1_secret' : 'player2_secret';
 
-        const { data: updatedRoom } = await supabase
+        const { data } = await supabase
           .from('game_rooms')
           .update({
             [field]: secret,
@@ -185,7 +187,7 @@ export const useGameRoom = () => {
           .select()
           .single();
 
-        const r = updatedRoom as GameRoom;
+        const r = data as GameRoom;
 
         if (r.player1_secret && r.player2_secret && r.player2_id) {
           await supabase
@@ -271,6 +273,7 @@ export const useGameRoom = () => {
     setPlayer(null);
     setGuesses([]);
     setError(null);
+    subscribedRoomId.current = null;
   }, []);
 
   return {
