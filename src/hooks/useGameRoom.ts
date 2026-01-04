@@ -4,6 +4,8 @@ import { GameRoom, Guess, Player } from '@/types/game';
 import { generatePlayerId, calculateHint, isValidSecret } from '@/lib/gameUtils';
 import { useToast } from '@/hooks/use-toast';
 
+const CLEANUP_HOURS = 6;
+
 export const useGameRoom = () => {
   const [room, setRoom] = useState<GameRoom | null>(null);
   const [guesses, setGuesses] = useState<Guess[]>([]);
@@ -12,7 +14,31 @@ export const useGameRoom = () => {
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
 
-  // Subscribe to room changes
+  /* =========================
+     🧹 CLEANUP ROOMS
+  ========================= */
+  const cleanupRooms = useCallback(async () => {
+    const cutoff = new Date(
+      Date.now() - CLEANUP_HOURS * 60 * 60 * 1000
+    ).toISOString();
+
+    await supabase.from('game_rooms').delete().eq('status', 'finished');
+    await supabase.from('game_rooms').delete().lt('last_activity_at', cutoff);
+  }, []);
+
+  /* =========================
+     🔄 UPDATE LAST ACTIVITY
+  ========================= */
+  const updateLastActivity = useCallback(async (roomId: string) => {
+    await supabase
+      .from('game_rooms')
+      .update({ last_activity_at: new Date().toISOString() })
+      .eq('id', roomId);
+  }, []);
+
+  /* =========================
+     📡 SUBSCRIPTIONS
+  ========================= */
   useEffect(() => {
     if (!room?.id) return;
 
@@ -58,235 +84,188 @@ export const useGameRoom = () => {
     };
   }, [room?.id]);
 
-  // Create or join room
-  const joinRoom = useCallback(async (roomName: string, playerName: string) => {
-    setLoading(true);
-    setError(null);
+  /* =========================
+     🚪 JOIN / CREATE ROOM
+  ========================= */
+  const joinRoom = useCallback(
+    async (roomName: string, playerName: string) => {
+      setLoading(true);
+      setError(null);
 
-    try {
-      const playerId = generatePlayerId();
+      try {
+        await cleanupRooms();
 
-      // Check if room exists
-      const { data: existingRoom, error: fetchError } = await supabase
-        .from('game_rooms')
-        .select('*')
-        .eq('room_name', roomName)
-        .maybeSingle();
+        const playerId = generatePlayerId();
 
-      if (fetchError) throw fetchError;
+        const { data: existingRoom } = await supabase
+          .from('game_rooms')
+          .select('*')
+          .eq('room_name', roomName)
+          .maybeSingle();
 
-      if (existingRoom) {
-        // Room exists - try to join as player 2
-        if (existingRoom.player2_id) {
-          throw new Error('Room is full! Only 2 players allowed.');
+        if (existingRoom) {
+          if (existingRoom.player2_id) {
+            throw new Error('Room is full! Only 2 players allowed.');
+          }
+
+          const { data: updatedRoom } = await supabase
+            .from('game_rooms')
+            .update({
+              player2_id: playerId,
+              player2_name: playerName,
+              status: 'waiting',
+              last_activity_at: new Date().toISOString(),
+            })
+            .eq('id', existingRoom.id)
+            .select()
+            .single();
+
+          setRoom(updatedRoom as GameRoom);
+          setPlayer({ id: playerId, name: playerName, isPlayer1: false });
+
+          const { data: existingGuesses } = await supabase
+            .from('guesses')
+            .select('*')
+            .eq('room_id', existingRoom.id)
+            .order('created_at', { ascending: true });
+
+          setGuesses((existingGuesses as Guess[]) || []);
+        } else {
+          const { data: newRoom } = await supabase
+            .from('game_rooms')
+            .insert({
+              room_name: roomName,
+              player1_id: playerId,
+              player1_name: playerName,
+              status: 'waiting',
+              last_activity_at: new Date().toISOString(),
+            })
+            .select()
+            .single();
+
+          setRoom(newRoom as GameRoom);
+          setPlayer({ id: playerId, name: playerName, isPlayer1: true });
+          setGuesses([]);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to join room';
+        setError(message);
+        toast({
+          title: 'Error',
+          description: message,
+          variant: 'destructive',
+        });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [cleanupRooms, toast]
+  );
+
+  /* =========================
+     🔐 SET SECRET
+  ========================= */
+  const setSecret = useCallback(
+    async (secret: string) => {
+      if (!room || !player) return;
+      if (!isValidSecret(secret)) return;
+
+      setLoading(true);
+
+      try {
+        const field = player.isPlayer1 ? 'player1_secret' : 'player2_secret';
+
+        const { data: updatedRoom } = await supabase
+          .from('game_rooms')
+          .update({
+            [field]: secret,
+            last_activity_at: new Date().toISOString(),
+          })
+          .eq('id', room.id)
+          .select()
+          .single();
+
+        const r = updatedRoom as GameRoom;
+
+        if (r.player1_secret && r.player2_secret && r.player2_id) {
+          await supabase
+            .from('game_rooms')
+            .update({
+              status: 'playing',
+              started_at: new Date().toISOString(),
+              current_turn: r.player1_id,
+              last_activity_at: new Date().toISOString(),
+            })
+            .eq('id', room.id);
         }
 
-        const { data: updatedRoom, error: updateError } = await supabase
-          .from('game_rooms')
-          .update({
-            player2_id: playerId,
-            player2_name: playerName,
-            status: 'waiting',
-          })
-          .eq('id', existingRoom.id)
-          .select()
-          .single();
-
-        if (updateError) throw updateError;
-
-        setRoom(updatedRoom as GameRoom);
-        setPlayer({ id: playerId, name: playerName, isPlayer1: false });
-
-        // Fetch existing guesses
-        const { data: existingGuesses } = await supabase
-          .from('guesses')
-          .select('*')
-          .eq('room_id', existingRoom.id)
-          .order('created_at', { ascending: true });
-
-        setGuesses((existingGuesses as Guess[]) || []);
-
-        toast({
-          title: 'Joined room!',
-          description: `You joined as ${playerName}`,
-        });
-      } else {
-        // Create new room
-        const { data: newRoom, error: createError } = await supabase
-          .from('game_rooms')
-          .insert({
-            room_name: roomName,
-            player1_id: playerId,
-            player1_name: playerName,
-            status: 'waiting',
-          })
-          .select()
-          .single();
-
-        if (createError) throw createError;
-
-        setRoom(newRoom as GameRoom);
-        setPlayer({ id: playerId, name: playerName, isPlayer1: true });
-        setGuesses([]);
-
-        toast({
-          title: 'Room created!',
-          description: 'Waiting for opponent to join...',
-        });
+        setRoom(r);
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to join room';
-      setError(message);
-      toast({
-        title: 'Error',
-        description: message,
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [toast]);
+    },
+    [room, player]
+  );
 
-  // Set secret number
-  const setSecret = useCallback(async (secret: string) => {
-    if (!room || !player) return;
-    if (!isValidSecret(secret)) {
-      toast({
-        title: 'Invalid secret',
-        description: 'Please enter exactly 3 digits',
-        variant: 'destructive',
-      });
-      return;
-    }
+  /* =========================
+     🎯 MAKE GUESS
+  ========================= */
+  const makeGuess = useCallback(
+    async (guessValue: string) => {
+      if (!room || !player) return;
+      if (!isValidSecret(guessValue)) return;
+      if (room.current_turn !== player.id) return;
 
-    setLoading(true);
+      setLoading(true);
 
-    try {
-      const updateField = player.isPlayer1 ? 'player1_secret' : 'player2_secret';
-      
-      const { data: updatedRoom, error: updateError } = await supabase
-        .from('game_rooms')
-        .update({ [updateField]: secret })
-        .eq('id', room.id)
-        .select()
-        .single();
+      try {
+        const opponentSecret = player.isPlayer1
+          ? room.player2_secret
+          : room.player1_secret;
 
-      if (updateError) throw updateError;
+        if (!opponentSecret) return;
 
-      const roomData = updatedRoom as GameRoom;
+        const hint = calculateHint(guessValue, opponentSecret);
+        const isWin = hint.includes('win');
 
-      // Check if both players have set secrets - start the game
-      if (roomData.player1_secret && roomData.player2_secret && roomData.player2_id) {
-        const { error: startError } = await supabase
-          .from('game_rooms')
-          .update({
-            status: 'playing',
-            started_at: new Date().toISOString(),
-            current_turn: roomData.player1_id, // Player 1 goes first
-          })
-          .eq('id', room.id);
-
-        if (startError) throw startError;
-      }
-
-      setRoom(roomData);
-      toast({
-        title: 'Secret saved!',
-        description: 'Your secret number has been locked in.',
-      });
-    } catch (err) {
-      toast({
-        title: 'Error',
-        description: 'Failed to save secret',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [room, player, toast]);
-
-  // Make a guess
-  const makeGuess = useCallback(async (guessValue: string) => {
-    if (!room || !player) return;
-    if (!isValidSecret(guessValue)) {
-      toast({
-        title: 'Invalid guess',
-        description: 'Please enter exactly 3 digits',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    if (room.current_turn !== player.id) {
-      toast({
-        title: 'Not your turn',
-        description: 'Wait for your opponent to guess',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      // Get opponent's secret
-      const opponentSecret = player.isPlayer1 ? room.player2_secret : room.player1_secret;
-      
-      if (!opponentSecret) {
-        throw new Error('Opponent secret not found');
-      }
-
-      const hint = calculateHint(guessValue, opponentSecret);
-      const isWin = hint.includes('win');
-
-      // Insert guess
-      const { error: guessError } = await supabase
-        .from('guesses')
-        .insert({
+        await supabase.from('guesses').insert({
           room_id: room.id,
           player_id: player.id,
           player_name: player.name,
           guess: guessValue,
-          hint: hint,
+          hint,
         });
 
-      if (guessError) throw guessError;
+        if (isWin) {
+          await supabase
+            .from('game_rooms')
+            .update({
+              status: 'finished',
+              winner_name: player.name,
+              ended_at: new Date().toISOString(),
+              last_activity_at: new Date().toISOString(),
+            })
+            .eq('id', room.id);
+        } else {
+          const nextTurn = player.isPlayer1
+            ? room.player2_id
+            : room.player1_id;
 
-      if (isWin) {
-        // Game over - player wins
-        await supabase
-          .from('game_rooms')
-          .update({
-            status: 'finished',
-            winner_name: player.name,
-            ended_at: new Date().toISOString(),
-          })
-          .eq('id', room.id);
-
-        toast({
-          title: '🎉 Victory!',
-          description: 'You guessed the secret number!',
-        });
-      } else {
-        // Switch turns
-        const nextTurn = player.isPlayer1 ? room.player2_id : room.player1_id;
-        await supabase
-          .from('game_rooms')
-          .update({ current_turn: nextTurn })
-          .eq('id', room.id);
+          await supabase
+            .from('game_rooms')
+            .update({
+              current_turn: nextTurn,
+              last_activity_at: new Date().toISOString(),
+            })
+            .eq('id', room.id);
+        }
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      toast({
-        title: 'Error',
-        description: 'Failed to submit guess',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [room, player, toast]);
+    },
+    [room, player]
+  );
 
-  // Leave room
   const leaveRoom = useCallback(() => {
     setRoom(null);
     setPlayer(null);
