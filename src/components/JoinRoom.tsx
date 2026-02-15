@@ -22,6 +22,7 @@ const content: Record<Language, {
   introDescription: string;
   howToPlayTitle: string;
   howToPlay: string[];
+  credit: string;
 }> = {
   en: {
     title: 'Secret Numbers',
@@ -43,6 +44,7 @@ const content: Record<Language, {
       'Take turns guessing your opponent\'s number.',
       'Use the clues each round to improve your next guess.',
     ],
+    credit: 'Game by Khaldoun with AI assistance.',
   },
   ar: {
     title: 'الأرقام السرّية',
@@ -64,6 +66,7 @@ const content: Record<Language, {
       'تبادلوا الأدوار لتخمين رقم الخصم.',
       'استخدم التلميحات في كل جولة لتحسين التخمين التالي.',
     ],
+    credit: 'اللعبة من تطوير خلدون بمساعدة الذكاء الاصطناعي.',
   },
 };
 
@@ -226,6 +229,7 @@ const JoinRoom = ({ onJoin, loading }: JoinRoomProps) => {
         <div className="mt-6 text-center text-sm text-muted-foreground animate-fade-in">
           <p>{t.howToPlay[0]}</p>
           <p>{t.howToPlay[1]}</p>
+          <p className="mt-2 text-xs">{t.credit}</p>
         </div>
       </div>
     </div>
