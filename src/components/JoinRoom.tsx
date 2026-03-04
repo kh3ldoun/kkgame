@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Gamepad2, Users, Lock } from 'lucide-react';
+import { Gamepad2, Users, Lock, CheckCircle2 } from 'lucide-react';
 
 interface JoinRoomProps {
   onJoin: (roomName: string, playerName: string) => void;
@@ -127,9 +127,22 @@ const JoinRoom = ({ onJoin, loading }: JoinRoomProps) => {
         </form>
 
         {/* Rules */}
-        <div className="mt-6 text-center text-sm text-muted-foreground animate-fade-in">
-          <p>Each player picks a secret 3-digit number.</p>
-          <p>Take turns guessing your opponent's number!</p>
+        <div className="mt-6 game-card animate-fade-in space-y-3">
+          <h2 className="text-sm font-semibold text-foreground">كيف تلعب؟ / How to play</h2>
+          <ul className="space-y-2 text-sm text-muted-foreground text-left">
+            <li className="flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 mt-0.5 text-primary shrink-0" />
+              اختر رقمًا سريًا من 3 خانات بعد دخول الغرفة.
+            </li>
+            <li className="flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 mt-0.5 text-primary shrink-0" />
+              في كل محاولة، ادخل رقمًا من 3 خانات لتخمين رقم خصمك.
+            </li>
+            <li className="flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 mt-0.5 text-primary shrink-0" />
+              استعمل سجل المحاولات لمراجعة التخمينات السابقة وتحسين خطتك.
+            </li>
+          </ul>
         </div>
       </div>
     </div>
